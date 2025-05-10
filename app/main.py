@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Query, Request
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 # --- เพิ่ม import สำหรับ BackgroundTasks ถ้าจะใช้ ---
 # from fastapi import BackgroundTasks
 # ---------------------------------------------------
@@ -13,19 +15,20 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# --- CORS Configuration ---
+# Add CORS middleware configuration
 origins = [
-    "http://localhost:3000",  # Origin of your Next.js frontend during development
+    "http://localhost:3000",  # For local development
+    "https://bcp-front.vercel.app",  # For production frontend
     "http://127.0.0.1:3000", # Might be needed too
     # Add other origins if necessary (e.g., deployed frontend URL)
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, # Allows specific origins
-    allow_credentials=True, # Allows cookies to be included in requests (if you use them)
-    allow_methods=["*"],    # Allows all methods (GET, POST, PUT, DELETE, etc.)
-    allow_headers=["*"],    # Allows all headers
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 # --- End CORS Configuration ---
 
