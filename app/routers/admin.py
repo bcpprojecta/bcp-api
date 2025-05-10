@@ -3,11 +3,26 @@ from supabase import Client
 from ..dependencies import get_supabase_service_client
 from ..schemas.auth_schemas import UserCreate, User
 from ..security import require_admin_role
+from typing import List, Optional
+from datetime import datetime
+from pydantic import BaseModel, EmailStr
+from uuid import UUID
 
 router = APIRouter(
     prefix="/admin", # กำหนด prefix สำหรับ admin routes ทั้งหมด
     tags=["Admin Management"] # กำหนด tag สำหรับกลุ่มนี้
 )
+
+# Pydantic schema for user data returned by /admin/users
+class AdminUserView(BaseModel):
+    id: UUID
+    email: EmailStr
+    created_at: datetime
+    last_sign_in_at: Optional[datetime] = None
+    user_metadata: Optional[dict] = {}
+
+    class Config:
+        from_attributes = True
 
 @router.post(
     "/create-user", # path จะกลายเป็น /admin/create-user
@@ -81,4 +96,40 @@ async def admin_create_new_user(
         raise HTTPException(
             status_code=status_code_for_client,
             detail=detail_msg_for_client
+        )
+
+@router.get(
+    "/users",
+    response_model=List[AdminUserView]
+)
+async def list_all_users(
+    supabase: Client = Depends(get_supabase_service_client),
+    current_admin: User = Depends(require_admin_role) # Enforces admin role for this endpoint
+):
+    try:
+        # Fetch all users. Supabase's list_users returns a paged response by default (50 users per page).
+        # For simplicity, we'll fetch the first page or all if it's a simple list.
+        # Based on the log, list_users() directly returns the list of User objects.
+        users_list = supabase.auth.admin.list_users()
+
+        # The users_list should directly be a list of user objects.
+        # If users_list is None or not a list (though unlikely based on logs if it prints a list), 
+        # Pydantic validation will fail or an error might occur earlier.
+        # We can add a simple check if it can be None.
+        if users_list is None:
+            print("Supabase list_users returned None.")
+            return [] # Return empty list if None
+        
+        # Pydantic will validate each item in the list against AdminUserView.
+        # Ensure that the fields in Supabase User objects match AdminUserView or use aliases.
+        # Based on the provided log, fields like id, email, created_at, last_sign_in_at, user_metadata exist.
+        return users_list
+
+    except Exception as e:
+        # Log the detailed error for debugging
+        print(f"Error listing users: Type='{type(e).__name__}', Message='{str(e)}'")
+        # Provide a generic error message to the client
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching the list of users."
         )
