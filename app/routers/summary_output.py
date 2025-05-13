@@ -7,6 +7,8 @@ import os
 from typing import List, Optional
 from ..schemas.summary_item import SummaryItem # Updated import
 from pydantic import BaseModel # Ensure BaseModel is imported if used directly in this file, though SummaryItem handles it
+from ..dependencies import get_supabase_client, get_current_user # Import get_current_user
+from gotrue.types import User # Import User type for Depends annotation
 
 # --- Supabase Configuration ---
 # It's highly recommended to use environment variables for sensitive data
@@ -54,19 +56,30 @@ COLUMNS_TO_SELECT = (
 async def get_usd_summary_data(
     skip: int = 0, 
     limit: int = 10, 
-    db: Client = Depends(get_supabase_client)
+    db: Client = Depends(get_supabase_client),
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Retrieve USD summary data from Supabase table "Summary_output(USD)".
+    Retrieve USD summary data from Supabase table "Summary_output(USD)" FOR THE CURRENT USER.
     Supports pagination using skip and limit.
     """
+    if not current_user or not current_user.id:
+        # This check might be redundant if get_current_user raises error, but belt-and-suspenders
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not authenticate user.")
+        
     try:
         table_name = "Summary_output(USD)" # ADJUST IF NECESSARY
         
         # Fetch data from Supabase
-        # Using the COLUMNS_TO_SELECT string ensures we only get what we need and handle spaces in names.
-        # Ensure the column used for ordering actually exists in the table and is cased correctly.
-        query = db.table(table_name).select(COLUMNS_TO_SELECT).order("Reporting Date", desc=True).offset(skip).limit(limit)
+        # ADD .eq() to filter by user_id
+        query = (
+            db.table(table_name)
+            .select(COLUMNS_TO_SELECT)
+            .eq("user_id", str(current_user.id)) # FILTER ADDED HERE - ensure user_id type matches
+            .order("Reporting Date", desc=True)
+            .offset(skip)
+            .limit(limit)
+        )
         response = query.execute()
 
         # The official supabase-py client returns data in response.data
@@ -76,15 +89,10 @@ async def get_usd_summary_data(
             print(f"Unexpected data format from Supabase: {api_response_data}")
             raise HTTPException(status_code=500, detail="Unexpected data format from Supabase.")
         
-        # Pydantic will automatically validate and map the data to SummaryItem instances
-        # because of the alias configuration and response_model=List[SummaryItem].
-        # No explicit loop for conversion is needed here if column names/aliases match.
         return api_response_data
     
     except Exception as e:
-        # Log the error for debugging
-        print(f"Error fetching data from Supabase: {e}")
-        # Consider more specific error handling if possible (e.g., PostgrestError from Supabase)
+        print(f"Error fetching data from Supabase for user {current_user.id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch USD summary data: {str(e)}")
 
 # Example: How to use this router in your main.py

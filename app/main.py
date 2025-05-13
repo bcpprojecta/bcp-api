@@ -7,6 +7,8 @@ from fastapi.responses import JSONResponse
 # ---------------------------------------------------
 from .routers import auth, admin, files, forecasts # <--- Import forecasts router
 from .routers import summary_output # <--- ADD THIS LINE
+from .routers import liquidity_ratios # ADD THIS
+from .routers import usd_exposure     # ADD THIS
 # from .routers import forecast # Keep these commented for now
 
 app = FastAPI(
@@ -36,6 +38,8 @@ app.include_router(auth.router, prefix="/auth", tags=["Authentication"]) # <--- 
 app.include_router(admin.router) # <--- Include the admin router (prefix="/admin", tags=["Admin Management"] are set in admin.py)
 app.include_router(files.router) # <--- Include the files router (prefix="/files", tags=["File Management"] included in router definition)
 app.include_router(summary_output.router) # <--- ADD THIS LINE
+app.include_router(liquidity_ratios.router) # ADD THIS
+app.include_router(usd_exposure.router)     # ADD THIS
 # app.include_router(forecasts.router) # Comment out this line
 # app.include_router(forecast.router, prefix="/forecast", tags=["Forecasting"])
 
