@@ -16,11 +16,14 @@ router = APIRouter(
 TABLE_NAME = "usd_exposure_results"
 
 def calculate_exposure(inputs: dict) -> float:
-    """Helper function to calculate USD exposure."""
-    assets = inputs.get('totalAssets', 0) or 0
-    liabilities = inputs.get('totalLiabilities', 0) or 0
-    capital = inputs.get('totalCapital', 0) or 0
-    return assets + liabilities + capital
+    """Helper function to calculate USD exposure.
+    All input values are treated as absolute positive values.
+    Formula: abs(Total Assets) - abs(Total Liabilities) - abs(Total Capital)
+    """
+    assets = abs(inputs.get('totalAssets', 0) or 0)
+    liabilities = abs(inputs.get('totalLiabilities', 0) or 0)
+    capital = abs(inputs.get('totalCapital', 0) or 0)
+    return assets - liabilities - capital
 
 @router.post("/", response_model=UsdExposureResult, status_code=status.HTTP_201_CREATED)
 async def create_usd_exposure_entry(
