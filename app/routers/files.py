@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks, Query
 from pydantic import BaseModel, Field
 from supabase import Client
+from postgrest import APIError
 from typing import Optional, Dict, Any, List, Union
 from datetime import datetime, date
 from io import BytesIO, StringIO
@@ -166,13 +167,12 @@ async def process_file_content_and_store(
             summary_df = file_processing.parse_summary_file_from_content(current_summary_stream)
             if summary_df is not None and not summary_df.empty:
                 print(f"[process_file_content_and_store] SUMMARY data parsed. Shape: {summary_df.shape}, Columns: {summary_df.columns.tolist()}")
-                # Ensure 'currency' (lowercase) column for Summary_output or Summary_output(USD)
                 if summary_target_table == "Summary_output":
                     if currency: summary_df['currency'] = currency.upper()
                     else: summary_df['currency'] = None 
                     print(f"[process_file_content_and_store] Added/updated 'currency' column in summary_df for {summary_target_table}. Value: {summary_df['currency'].unique().tolist()[:1]}")
-                # For Summary_output(USD), currency is implied by table name, no 'currency' column needed in df or table.
                 
+                await delete_existing_data_by_metadata_id(db, summary_target_table, file_metadata_id)
                 await insert_parsed_data(db, summary_target_table, summary_df, user_id, file_metadata_id)
                 summary_parsed_successfully = True
                 print(f"[process_file_content_and_store] SUMMARY data for {file_type.value} processed and stored in {summary_target_table}.")
@@ -181,33 +181,28 @@ async def process_file_content_and_store(
 
             # 2. Parse and Insert Transaction Data (from the same .041 file)
             print(f"[process_file_content_and_store] Attempting to parse TRANSACTION data for {file_type.value} (for Output table)")
-            # raw_transaction_parser.process_041_content expects BytesIO
             current_transaction_stream = BytesIO(file_content_bytes) 
             
-            # Pass the 'currency' from the upload to process_041_content as 'currency_code'
             transaction_df = raw_transaction_parser.process_041_content(
                 file_content_stream=current_transaction_stream, 
                 db_client=db, 
-                currency_code=currency # Pass the currency variable from the outer scope
+                currency_code=currency
             )
             if transaction_df is not None and not transaction_df.empty:
                 print(f"[process_file_content_and_store] TRANSACTION data parsed. Shape: {transaction_df.shape}, Columns: {transaction_df.columns.tolist()}")
-                # Checks for 'currency' and 'transaction_category' should now primarily rely on raw_transaction_parser to provide them correctly.
-                # The renaming/adding logic below can be simplified or removed if raw_transaction_parser is guaranteed to return correct lowercase columns.
-
                 if 'currency' not in transaction_df.columns:
                      print(f"CRITICAL ⚠️ [process_file_content_and_store] 'currency' column still MISSING from transaction_df after call to process_041_content for Output table.")
-                
                 if 'transaction_category' not in transaction_df.columns:
                     print(f"⚠️ [process_file_content_and_store] 'transaction_category' column not found in transaction_df. Will be NULL if not present in records.")
 
-                await insert_parsed_data(db, "Output", transaction_df, user_id, file_metadata_id)
+                output_target_table = "Output"
+                await delete_existing_data_by_metadata_id(db, output_target_table, file_metadata_id)
+                await insert_parsed_data(db, output_target_table, transaction_df, user_id, file_metadata_id)
                 transaction_parsed_successfully = True
                 print(f"[process_file_content_and_store] TRANSACTION data for {file_type.value} processed and stored in Output table.")
             else:
                 print(f"[process_file_content_and_store] TRANSACTION data parsing failed or returned empty for {file_type.value}.")
 
-            # Determine final processing status
             if summary_parsed_successfully and transaction_parsed_successfully:
                 processing_status = "processed_successfully"
                 processing_message = f"File ({file_type.value}) processed: Summary and Transaction data stored."
@@ -257,6 +252,7 @@ async def process_file_content_and_store(
                     if 'Transaction Category' in parsed_df.columns:
                         parsed_df.rename(columns={'Transaction Category': 'transaction_category'}, inplace=True)
                 
+                await delete_existing_data_by_metadata_id(db, target_table_name, file_metadata_id)
                 await insert_parsed_data(db, target_table_name, parsed_df, user_id, file_metadata_id)
                 processing_status = "processed_successfully" 
                 processing_message = f"Transaction data ({file_type.value}) processed and stored."
@@ -271,12 +267,34 @@ async def process_file_content_and_store(
                  file_stream = BytesIO(file_content_bytes) # Re-create as BytesIO if it was StringIO
             parsed_df = file_processing.parse_liquidity_template_from_content(file_stream)
             target_table_name = "liquidity_ratios" # Correct - Matches screenshot
+            if parsed_df is not None and not parsed_df.empty:
+                await delete_existing_data_by_metadata_id(db, target_table_name, file_metadata_id)
+                await insert_parsed_data(db, target_table_name, parsed_df, user_id, file_metadata_id)
+                processing_status = "processed_successfully"
+                processing_message = f"Liquidity ratios data ({file_type.value}) processed and stored."
+            else:
+                processing_status = "processing_failed"
+                processing_message = f"Liquidity ratios data parsing ({file_type.value}) failed or was empty."
+            print(f"[process_file_content_and_store] Status for {file_type.value}: {processing_status} - {processing_message}")
+            parsed_df = None 
+            target_table_name = None 
         
         elif file_type == FileTypeEnum.USD_EXPOSURE_TEMPLATE:
             if not isinstance(file_stream, BytesIO):
                  file_stream = BytesIO(file_content_bytes)
             parsed_df = file_processing.parse_usd_exposure_template_from_content(file_stream)
             target_table_name = "usd_exposure_values" # Correct - Matches screenshot
+            if parsed_df is not None and not parsed_df.empty:
+                await delete_existing_data_by_metadata_id(db, target_table_name, file_metadata_id)
+                await insert_parsed_data(db, target_table_name, parsed_df, user_id, file_metadata_id)
+                processing_status = "processed_successfully"
+                processing_message = f"USD exposure data ({file_type.value}) processed and stored."
+            else:
+                processing_status = "processing_failed"
+                processing_message = f"USD exposure data parsing ({file_type.value}) failed or was empty."
+            print(f"[process_file_content_and_store] Status for {file_type.value}: {processing_status} - {processing_message}")
+            parsed_df = None 
+            target_table_name = None 
         
         elif file_type == FileTypeEnum.MAPPING_TABLE:
             # For MAPPING_TABLE, we might just store the file metadata
@@ -292,6 +310,7 @@ async def process_file_content_and_store(
             print(processing_message)
             # No parsed_df or target_table_name needed if just storing metadata
             # Update metadata directly here if no further data insertion
+            # await delete_existing_data_by_metadata_id(db, target_table_name, file_metadata_id) # REMOVE if target_table_name is None or unreliable here
             db.table("uploaded_files_metadata").update({
                 "processing_status": processing_status,
                 "processing_message": processing_message if processing_status != "processed_successfully" else None
@@ -305,6 +324,7 @@ async def process_file_content_and_store(
             processing_message = f"Unhandled FileTypeEnum member: '{file_type.value}'. No processing defined."
             print(processing_message)
             # Update metadata status for unhandled enum members
+            # await delete_existing_data_by_metadata_id(db, target_table_name, file_metadata_id) # REMOVE if target_table_name is None or unreliable here
             db.table("uploaded_files_metadata").update({
                 "processing_status": processing_status,
                 "processing_message": processing_message
@@ -312,14 +332,16 @@ async def process_file_content_and_store(
             return processing_status, processing_message
 
         # --- Update metadata for the processed file ---
+        # This block is crucial and should always attempt to run to reflect the outcome of parsing.
         try:
+            print(f"[process_file_content_and_store] Attempting to update final metadata for file_id {file_metadata_id} with status: {processing_status}")
             db.table("uploaded_files_metadata").update({
                 "processing_status": processing_status,
-                "processing_message": processing_message if "failed" in processing_status or "warning" in processing_status or "only" in processing_status else None
+                "processing_message": processing_message if "failed" in processing_status or "warning" in processing_status or "only" in processing_status or processing_message else None # Ensure message is stored if present
             }).eq("id", str(file_metadata_id)).execute()
+            print(f"[process_file_content_and_store] Successfully updated final metadata for file_id {file_metadata_id}.")
         except Exception as meta_update_e:
-            print(f"CRITICAL: Failed to update metadata for file_id {file_metadata_id} after processing: {meta_update_e}")
-            # This is a secondary error, the primary processing result is more important for the user response
+            print(f"CRITICAL: [process_file_content_and_store] Failed to update final metadata for file_id {file_metadata_id} after processing: {meta_update_e}")
 
     except Exception as e:
         processing_status = "processing_failed"
@@ -367,9 +389,9 @@ async def run_file_processing_background(
             print(f"[BG Task {file_metadata_id}] File downloaded successfully ({len(file_content_bytes)} bytes).")
         except Exception as download_e:
             print(f"❌ [BG Task {file_metadata_id}] Failed to download file from storage: {download_e}")
-            processing_status = "processing_failed"
+            processing_status = "download_failed" # More specific status
             processing_message = f"Failed to download file from storage: {str(download_e)}"
-            # Update metadata and exit task
+            # Update metadata and exit task - NO delete_existing_data here as target_table is unknown
             db.table("uploaded_files_metadata").update({
                 "processing_status": processing_status,
                 "processing_message": processing_message
@@ -390,16 +412,22 @@ async def run_file_processing_background(
             background_tasks=dummy_bg_tasks
         )
         print(f"[BG Task {file_metadata_id}] process_file_content_and_store finished with status: {final_status}, message: {final_message}")
-        # The status should have already been updated inside process_file_content_and_store
+        # The status should have already been updated inside process_file_content_and_store,
+        # but we can do it again here to be absolutely sure or if process_file_content_and_store failed to update.
+        # However, the primary update responsibility is now more robustly within process_file_content_and_store's own final try-except.
+        # If process_file_content_and_store raised an exception caught by the outer try-except here, 'final_status' won't be set.
+        # So, the metadata update in the outer 'except Exception as bg_e' block will handle that.
 
     except Exception as bg_e:
         # Catch any unexpected errors during the background task execution itself
-        processing_status = "processing_failed"
+        # This includes errors from process_file_content_and_store if it raised an exception
+        processing_status = "background_task_failed" # More specific status
         processing_message = f"Unexpected error in background task: {type(bg_e).__name__} - {str(bg_e)}"
         print(f"❌ [BG Task {file_metadata_id}] {processing_message}")
         import traceback
         traceback.print_exc()
-        # Attempt to update metadata one last time
+        # Attempt to update metadata one last time with the failure details
+        # NO delete_existing_data here
         try:
             db.table("uploaded_files_metadata").update({
                 "processing_status": processing_status,
@@ -417,20 +445,18 @@ async def upload_data_file(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_active_user),
     db: Client = Depends(get_supabase_client),
-    background_tasks: BackgroundTasks = BackgroundTasks() # Keep dependency injection
+    background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """
-    Uploads a data file, queues it for processing, stores the file in Supabase Storage,
-    and saves initial metadata. Processing happens in the background.
+    Uploads a data file. If metadata for the same user, file_type, and name (with date prefix if applicable)
+    exists, its ID is reused to overwrite associated data. Otherwise, new metadata is created.
+    Processing happens in the background.
     """
     user_id = current_user.id
     original_filename = file.filename
     content_type = file.content_type
-    initial_status = "processing_queued" # New initial status
+    initial_status = "processing_queued"
 
-    # --- (ส่วน Debugging User Info สามารถคงไว้ได้ถ้าต้องการ) ---
-
-    # --- 1. Validate file_type and currency ---
     if file_type == FileTypeEnum.CAD_SUMMARY_RAW or file_type == FileTypeEnum.CAD_TRANSACTION_RAW:
          if currency != 'CAD':
              print(f"Warning: Currency mismatch for {file_type.value}. Received {currency}, expected CAD. Overriding to CAD.")
@@ -444,107 +470,139 @@ async def upload_data_file(
 
     print(f"Received upload request: user_id={user_id}, file_type='{file_type.value}', currency='{currency}', filename='{original_filename}'")
 
-    # --- 2. Upload file to Supabase Storage ---
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    safe_original_filename = "".join(c if c.isalnum() or c in ('.', '-', '_') else '_' for c in original_filename)
-    storage_path = f"{user_id}/{file_type.value}/{timestamp}_{safe_original_filename}"
+    # Read file content once for date extraction and upload
     file_content_bytes = await file.read()
-    file_size_bytes = len(file_content_bytes) # Get file size
+    file_size_bytes = len(file_content_bytes)
 
-    # --- NEW: Attempt to get forecast_date for .041/.txt files ---
+    # Determine storage_path with potential date prefix
+    safe_original_filename = "".join(c if c.isalnum() or c in ('.', '-', '_') else '_' for c in original_filename)
+    storage_path_base = f"{user_id}/{file_type.value}"
+    storage_path: str
     forecast_date_dt: Optional[datetime] = None
+
     if file_type in [FileTypeEnum.CAD_SUMMARY_RAW, FileTypeEnum.USD_SUMMARY_RAW, FileTypeEnum.CAD_TRANSACTION_RAW, FileTypeEnum.USD_TRANSACTION_RAW]:
         try:
-            # Pass BytesIO for content sniffing
             temp_stream = BytesIO(file_content_bytes)
             forecast_date_dt = file_processing.get_forecast_date_from_content(temp_stream)
             temp_stream.close()
             if forecast_date_dt:
                 print(f"Extracted forecast_date: {forecast_date_dt} for {original_filename}")
+                date_prefix = forecast_date_dt.strftime("%Y-%m-%d")
+                storage_path = f"{storage_path_base}/{date_prefix}_{safe_original_filename}"
             else:
-                print(f"No forecast_date found in header for {original_filename}")
+                print(f"No forecast_date found in header for {original_filename}, using default storage path (no date prefix).")
+                storage_path = f"{storage_path_base}/{safe_original_filename}"
         except Exception as e:
-            print(f"⚠️ Could not extract forecast_date for {original_filename}: {e}")
-    # --- End NEW ---
+            print(f"⚠️ Could not extract forecast_date for {original_filename}: {e}. Using default storage path (no date prefix).")
+            storage_path = f"{storage_path_base}/{safe_original_filename}"
+    else:
+        storage_path = f"{storage_path_base}/{safe_original_filename}"
+    
+    print(f"Determined storage_path: {storage_path}")
 
+    # Upload to Supabase Storage (overwrite if path exists)
     try:
         storage_response = db.storage.from_("uploads").upload(
             path=storage_path,
-            file=file_content_bytes,
-            file_options={"content-type": content_type or 'application/octet-stream', "upsert": "false"}
+            file=file_content_bytes, # Use the already read bytes
+            file_options={"content-type": content_type or 'application/octet-stream', "upsert": "true"}
         )
         print(f"Supabase storage response: {storage_response}")
-        # Add more robust error checking based on Supabase client version if needed
     except Exception as e:
         print(f"❌ Error uploading to Supabase Storage: {type(e).__name__} - {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to upload file to storage: {str(e)}")
 
-    # --- 3. Save initial metadata to uploaded_files_metadata table ---
-    file_metadata_id = uuid.uuid4() # Generate UUID for the metadata record
-    metadata_to_insert = {
-        "id": str(file_metadata_id),
-        "user_id": str(user_id),
-        "original_filename": original_filename, # New field name
-        "storage_path": storage_path,           # New field name
-        "file_type": file_type.value,
-        "currency": currency,
-        "file_size_bytes": file_size_bytes,     # New field
-        "content_type": content_type,           # New field
-        "upload_timestamp": datetime.utcnow().isoformat(),
-        "processing_status": initial_status,
-        "forecast_date": forecast_date_dt.isoformat() if forecast_date_dt else None # Store new field
-    }
-    try:
-        response = db.table("uploaded_files_metadata").insert(metadata_to_insert).execute()
-        if not response.data or len(response.data) == 0:
-             try:
-                 db.storage.from_("uploads").remove([storage_path])
-                 print(f"Cleaned up uploaded file from storage: {storage_path}")
-             except Exception as cleanup_e:
-                 print(f"Error cleaning up storage after failed metadata insert: {cleanup_e}")
-             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save file metadata after successful upload.")
-        # inserted_metadata = response.data[0] # No need to get it back if we generated the UUID
-        print(f"✅ Successfully inserted initial metadata with ID: {file_metadata_id}, status: {initial_status}")
+    # Check for existing metadata for this specific storage_path and user
+    existing_metadata_response = db.table("uploaded_files_metadata")\
+                                  .select("id")\
+                                  .eq("user_id", str(user_id))\
+                                  .eq("storage_path", storage_path)\
+                                  .maybe_single()\
+                                  .execute()
+    
+    file_metadata_id_to_use: uuid.UUID
+    current_utc_time = datetime.utcnow()
 
-    except Exception as e:
+    if hasattr(existing_metadata_response, 'data') and existing_metadata_response.data:
+        existing_metadata_id_str = existing_metadata_response.data.get('id')
+        file_metadata_id_to_use = uuid.UUID(existing_metadata_id_str)
+        print(f"Found existing metadata (ID: {file_metadata_id_to_use}) for storage_path: {storage_path}. Will update it.")
+        metadata_to_update = {
+            "original_filename": original_filename, # Keep original filename in metadata, even if storage_path has date prefix
+            "file_type": file_type.value,
+            "currency": currency,
+            "file_size_bytes": file_size_bytes,
+            "content_type": content_type,
+            "upload_timestamp": current_utc_time.isoformat(),
+            "processing_status": initial_status,
+            "processing_message": None,
+            "forecast_date": forecast_date_dt.isoformat() if forecast_date_dt else None
+        }
         try:
-            db.storage.from_("uploads").remove([storage_path])
-            print(f"Cleaned up uploaded file from storage: {storage_path}")
-        except Exception as cleanup_e:
-            print(f"Error cleaning up storage after failed metadata insert: {cleanup_e}")
-        print(f"❌ Error inserting initial metadata: {type(e).__name__} - {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to save initial file metadata: {str(e)}")
+            update_response = db.table("uploaded_files_metadata")\
+                                .update(metadata_to_update)\
+                                .eq("id", str(file_metadata_id_to_use))\
+                                .execute()
+            if not (hasattr(update_response, 'data') and update_response.data):
+                 print(f"Warning: Update metadata for ID {file_metadata_id_to_use} might not have been successful or returned no data. Response: {update_response}")
+            print(f"✅ Successfully updated existing metadata (ID: {file_metadata_id_to_use}), status: {initial_status}")
+        except Exception as e:
+            print(f"❌ Error updating existing metadata (ID: {file_metadata_id_to_use}): {type(e).__name__} - {str(e)}")
+            pass # Or raise HTTPException
+    else:
+        file_metadata_id_to_use = uuid.uuid4()
+        print(f"No existing metadata for storage_path: {storage_path}. Creating new metadata with ID: {file_metadata_id_to_use}.")
+        metadata_to_insert = {
+            "id": str(file_metadata_id_to_use),
+            "user_id": str(user_id),
+            "original_filename": original_filename,
+            "storage_path": storage_path, # This now includes date_prefix if applicable
+            "file_type": file_type.value,
+            "currency": currency,
+            "file_size_bytes": file_size_bytes,
+            "content_type": content_type,
+            "upload_timestamp": current_utc_time.isoformat(),
+            "processing_status": initial_status,
+            "forecast_date": forecast_date_dt.isoformat() if forecast_date_dt else None
+        }
+        try:
+            insert_response = db.table("uploaded_files_metadata").insert(metadata_to_insert).execute()
+            if not (hasattr(insert_response, 'data') and insert_response.data and len(insert_response.data) > 0):
+                 try:
+                     db.storage.from_("uploads").remove([storage_path])
+                     print(f"Cleaned up uploaded file from storage: {storage_path} due to failed metadata insert.")
+                 except Exception as cleanup_e:
+                     print(f"Error cleaning up storage after failed metadata insert: {cleanup_e}")
+                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save file metadata after successful upload.")
+            print(f"✅ Successfully inserted new metadata (ID: {file_metadata_id_to_use}), status: {initial_status}")
+        except Exception as e:
+            try:
+                db.storage.from_("uploads").remove([storage_path])
+                print(f"Cleaned up uploaded file from storage: {storage_path} due to failed metadata insert.")
+            except Exception as cleanup_e:
+                print(f"Error cleaning up storage after failed metadata insert: {cleanup_e}")
+            print(f"❌ Error inserting new metadata: {type(e).__name__} - {str(e)}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to save new file metadata: {str(e)}")
 
-    # --- 4. Add the processing task to the background --- 
-    # Delete the original synchronous call:
-    # final_processing_status, final_processing_message = await process_file_content_and_store(...)
-
-    # Add the background task:
     background_tasks.add_task(
         run_file_processing_background,
-        db=db, # Pass the client
+        db=db,
         user_id=user_id,
-        file_metadata_id=file_metadata_id,
+        file_metadata_id=file_metadata_id_to_use,
         file_type=file_type,
         currency=currency,
-        storage_path=storage_path,
-        forecast_date=forecast_date_dt # Pass the extracted forecast_date
+        storage_path=storage_path, # Pass the potentially date-prefixed storage_path
+        forecast_date=forecast_date_dt
     )
+    print(f"✅ Queued background task for file ID: {file_metadata_id_to_use}")
 
-    print(f"✅ Queued background task for file ID: {file_metadata_id}")
-
-    # --- 5. Return immediate response to the user --- 
-    # Remove the old return based on synchronous processing:
-    # return FileUploadResponse(... with final_processing_status ...)
-
-    # Return the new response indicating queuing:
     return FileUploadResponse(
         message="File received and queued for processing.",
-        file_id=str(file_metadata_id),
+        file_id=str(file_metadata_id_to_use),
         original_filename=original_filename,
         storage_path=storage_path,
         content_type=content_type,
-        processing_status=initial_status # Return the queued status
+        processing_status=initial_status
     )
 
 @router.get("/history", response_model=List[UploadedFileMetadataItem])
@@ -753,3 +811,45 @@ async def get_latest_forecast_data(
         )
 
 # Note: The old /forecasts/ router and its endpoints are assumed to be removed or commented out.
+
+async def delete_existing_data_by_metadata_id(
+    db: Client, 
+    table_name: str, 
+    file_metadata_id: uuid.UUID
+):
+    """Deletes records from the specified table that match the file_metadata_id."""
+    # Consistently use 'upload_metadata_id' as the column name for the foreign key
+    foreign_key_column_name = "upload_metadata_id"
+    try:
+        print(f"[delete_existing_data_by_metadata_id] Attempting to delete data from '{table_name}' for {foreign_key_column_name}: {file_metadata_id}")
+        delete_result = (
+            db.table(table_name)
+            .delete()
+            .eq(foreign_key_column_name, str(file_metadata_id)) # <<< USE THE CONSISTENT COLUMN NAME
+            .execute()
+        )
+        # Supabase delete often returns a list of the deleted records in `data`
+        # For PostgREST, if `Prefer: return=representation` is set, `data` contains deleted items.
+        # Otherwise, `data` might be empty, and success is indicated by lack of error.
+        if hasattr(delete_result, 'data') and delete_result.data:
+            print(f"[delete_existing_data_by_metadata_id] Successfully deleted {len(delete_result.data)} record(s) from '{table_name}' for {foreign_key_column_name}: {file_metadata_id}")
+        elif hasattr(delete_result, 'count') and delete_result.count is not None: # Some clients might return a count
+             print(f"[delete_existing_data_by_metadata_id] Successfully deleted {delete_result.count} record(s) from '{table_name}' for {foreign_key_column_name}: {file_metadata_id}")
+        else:
+            # If no data/count and no error, assume success but log it for verification
+            print(f"[delete_existing_data_by_metadata_id] Executed delete for '{table_name}' for {foreign_key_column_name}: {file_metadata_id}. Response did not explicitly state count of deleted rows, check for errors.")
+        
+        # You might want to check for errors in delete_result more explicitly if your client version provides them
+        if hasattr(delete_result, 'error') and delete_result.error:
+            print(f"ERROR [delete_existing_data_by_metadata_id] Error during deletion from '{table_name}': {delete_result.error}")
+            # Decide if this should raise an exception
+            # raise Exception(f"Error deleting from {table_name}: {delete_result.error}")
+
+    except APIError as e:
+        print(f"ERROR [delete_existing_data_by_metadata_id] Supabase APIError deleting from '{table_name}' for {foreign_key_column_name}: {file_metadata_id}. Error: {e}")
+        # Depending on desired behavior, you might re-raise or handle
+        raise
+    except Exception as e:
+        print(f"ERROR [delete_existing_data_by_metadata_id] Unexpected error deleting from '{table_name}' for {foreign_key_column_name}: {file_metadata_id}. Error: {type(e).__name__} - {e}")
+        # Depending on desired behavior, you might re-raise or handle
+        raise
