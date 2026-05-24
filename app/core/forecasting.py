@@ -511,10 +511,6 @@ def build_cash_position_forecast(
             actuals_df['Date'] = pd.to_datetime(actuals_df['Date'])
             actuals_df['Actual Cash Balance'] = pd.to_numeric(actuals_df['Actual Cash Balance'], errors='coerce')
             print(f"  Fetched {len(actuals_df)} actual balance records from {target_summary_table_actuals}.")
-            
-            # MODIFICATION: Add .ffill() to Actual Cash Balance like in the notebook
-            actuals_df['Actual Cash Balance'] = actuals_df['Actual Cash Balance'].ffill()
-            print(f"  Applied .ffill() to 'Actual Cash Balance'. Nulls after ffill: {actuals_df['Actual Cash Balance'].isnull().sum()}")
         else:
             print(f"⚠️ No actual closing balances found for user {user_id}, currency {currency} in {target_summary_table_actuals} for the forecast period, or error fetching.")
             actuals_df = pd.DataFrame(columns=['Date', 'Actual Cash Balance'])
@@ -525,6 +521,8 @@ def build_cash_position_forecast(
         # Ensure daily_forecast_df['Date'] is also datetime before merging
         daily_forecast_df['Date'] = pd.to_datetime(daily_forecast_df['Date'])
         merged_df = pd.merge(daily_forecast_df, actuals_df, on="Date", how="left")
+        merged_df = merged_df.sort_values(by="Date")
+        merged_df['Actual Cash Balance'] = merged_df['Actual Cash Balance'].ffill()
 
         # Use standard pandas column names and rename only before insertion if needed
         # Ensure 'Date' column exists in merged_df (it should from daily_forecast_df)
