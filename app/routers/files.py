@@ -812,6 +812,52 @@ async def get_latest_forecast_data(
 
 # Note: The old /forecasts/ router and its endpoints are assumed to be removed or commented out.
 
+
+def _summarize_currency_data(db: Client, user_id: uuid.UUID, table_name: str) -> Optional[Dict[str, Any]]:
+    resp = (
+        db.table(table_name)
+        .select('"Reporting Date"')
+        .eq("user_id", str(user_id))
+        .order('"Reporting Date"', desc=False)
+        .execute()
+    )
+    if not resp.data:
+        return None
+    dates = sorted({pd.to_datetime(r["Reporting Date"]).date() for r in resp.data})
+    earliest, latest = dates[0], dates[-1]
+    expected = {d.date() for d in pd.bdate_range(earliest, latest)}
+    actual = set(dates)
+    missing = sorted(expected - actual)
+    return {
+        "earliest": earliest.isoformat(),
+        "latest": latest.isoformat(),
+        "record_count": len(dates),
+        "expected_business_days": len(expected),
+        "missing_count": len(missing),
+        "missing_dates": [d.isoformat() for d in missing[:20]],
+    }
+
+
+@router.get("/data-summary")
+async def get_data_summary(
+    current_user: User = Depends(get_current_active_user),
+    db: Client = Depends(get_supabase_client)
+):
+    """Returns earliest/latest Reporting Date, record count and missing business days
+    per currency for the current user. Powers the Dashboard / History data card."""
+    try:
+        return {
+            "cad": _summarize_currency_data(db, current_user.id, "Summary_output"),
+            "usd": _summarize_currency_data(db, current_user.id, "Summary_output(USD)"),
+        }
+    except Exception as e:
+        print(f"❌ Error in /files/data-summary: {type(e).__name__} - {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compute data summary."
+        )
+
+
 async def delete_existing_data_by_metadata_id(
     db: Client, 
     table_name: str, 
