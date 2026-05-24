@@ -99,18 +99,22 @@ def parse_summary_file_from_content(file_content_stream: Union[StringIO, BytesIO
         
         df.columns = cols
 
-        # Extract dates from CENTRAL1 lines within the content
-        # This assumes summary data might be mixed with other data in the .041 file
-        pattern = r'^CENTRAL1\s+(\d{2}/\d{2}/\d{2})'
+        # Extract the actual data date from the "AS OF MM/DD/YY" line.
+        # The CENTRAL1 line in the header is the file's RUN date (the morning the
+        # file was produced) — it is one day AFTER the data it describes. The
+        # "AS OF" line is the true reporting date (the previous business day's
+        # end-of-day balance). Using CENTRAL1 would shift every record forward
+        # by one day and pile Friday's closing balances onto Saturday.
+        pattern = r'AS OF\s+(\d{2}/\d{2}/\d{2})'
         dates = []
         for line in content.splitlines():
-            match = re.match(pattern, line.strip())
+            match = re.search(pattern, line)
             if match:
                 dates.append(match.group(1))
         dates = sorted(list(set(dates))) # Get unique sorted dates
 
         if not dates:
-            print("⚠️ No CENTRAL1 dates found in the content for summary data.")
+            print("⚠️ No AS OF dates found in the content for summary data.")
             # If no dates found, it might mean the relevant section is missing or format is unexpected.
             # Depending on requirements, could return empty or raise an error.
             return pd.DataFrame()

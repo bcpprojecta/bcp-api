@@ -16,8 +16,10 @@ def get_reporting_date_from_header(file_content_stream: BytesIO) -> pd.Timestamp
         header_content = file_content_stream.read(2048).decode('latin-1', errors='ignore')
         file_content_stream.seek(0) # Reset stream for further processing by other functions
 
+        # Use the "AS OF" line — that is the actual data date. The CENTRAL1
+        # line is the file's run date (the next morning) and is off by one.
         for line in header_content.splitlines():
-            match = re.match(r'^CENTRAL1\s+(\d{2}/\d{2}/\d{2})', line.strip())
+            match = re.search(r'AS OF\s+(\d{2}/\d{2}/\d{2})', line)
             if match:
                 return pd.to_datetime(match.group(1), format="%m/%d/%y", errors='coerce')
     except Exception as e:
@@ -41,35 +43,40 @@ def parse_transaction_content(file_content_stream: BytesIO) -> pd.DataFrame | No
             content = file_content_stream.read().decode('latin-1', errors='ignore')
         file_content_stream.seek(0) # Reset for any further use
 
+        # Pre-scan the file for "AS OF MM/DD/YY" — that is the true data date.
+        # The CENTRAL1 line (which the prior version used) is the file's run
+        # date, one day ahead of the data, so it shifted every record forward
+        # by a day and dumped Friday's transactions onto Saturday.
+        as_of_dates = []
+        for line in content.splitlines():
+            match = re.search(r'AS OF\s+(\d{2}/\d{2}/\d{2})', line)
+            if match:
+                parsed = pd.to_datetime(match.group(1), format='%m/%d/%y', errors='coerce')
+                if not pd.isna(parsed):
+                    as_of_dates.append(parsed)
+
         # Define column widths
         widths = [8, 9, 3, 18, 18, 20, 20]  # CH/BR, EFF DATE, gap, DEBIT_1, DEBIT_2, CREDIT_1, CREDIT_2
         df = pd.read_fwf(StringIO(content), widths=widths, header=None)
         df.columns = ['CH/BR', 'EFF DATE', 'GAP', 'DEBIT_1', 'DEBIT_2', 'CREDIT_1', 'CREDIT_2']
-        
+
         df['Reporting Date'] = pd.NaT
-        last_reporting_date = None
+        # If the file has multiple "AS OF" blocks (rare but possible) we use the
+        # latest one as the file-wide reporting date — same heuristic as before
+        # but anchored to AS OF instead of CENTRAL1.
+        last_reporting_date = max(as_of_dates) if as_of_dates else None
 
         for index, row in df.iterrows():
-            if row['CH/BR'] == 'CENTRAL1':
-                eff_date_str = str(row['EFF DATE']).strip()
-                parsed_date = pd.to_datetime(eff_date_str, format='%m/%d/%y', errors='coerce')
-                if not pd.isna(parsed_date):
-                    last_reporting_date = parsed_date
-                    df.at[index, 'Reporting Date'] = parsed_date
-            else: # For non-header rows, apply reporting date logic based on EFF DATE
-                eff_date_str = str(row['EFF DATE']).strip()
-                parsed_eff_date = pd.to_datetime(eff_date_str, format='%m/%d/%y', errors='coerce')
-                if not pd.isna(parsed_eff_date):
-                    if last_reporting_date is None: # Should ideally be set by a CENTRAL1 line first
-                        last_reporting_date = parsed_eff_date
-                    # If current EFF DATE is later than last_reporting_date, update last_reporting_date
-                    # This logic might need refinement based on exact file specs for multi-date files
-                    if parsed_eff_date > last_reporting_date:
-                         last_reporting_date = parsed_eff_date
-                    df.at[index, 'Reporting Date'] = last_reporting_date
-
-                elif last_reporting_date is not None: # Carry forward if EFF DATE is invalid/missing
-                    df.at[index, 'Reporting Date'] = last_reporting_date
+            eff_date_str = str(row['EFF DATE']).strip()
+            parsed_eff_date = pd.to_datetime(eff_date_str, format='%m/%d/%y', errors='coerce')
+            if not pd.isna(parsed_eff_date):
+                # Fallback: if we somehow never found an "AS OF" line, anchor on
+                # the first valid EFF DATE we encounter.
+                if last_reporting_date is None:
+                    last_reporting_date = parsed_eff_date
+                df.at[index, 'Reporting Date'] = last_reporting_date
+            elif last_reporting_date is not None:
+                df.at[index, 'Reporting Date'] = last_reporting_date
         
         # Ensure Reporting Date is filled if possible, drop rows where it's still NaT
         df.dropna(subset=['Reporting Date'], inplace=True)
