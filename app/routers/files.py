@@ -834,7 +834,7 @@ def _summarize_currency_data(db: Client, user_id: uuid.UUID, table_name: str) ->
         "record_count": len(dates),
         "expected_business_days": len(expected),
         "missing_count": len(missing),
-        "missing_dates": [d.isoformat() for d in missing[:20]],
+        "missing_dates": [d.isoformat() for d in missing[:500]],
     }
 
 
