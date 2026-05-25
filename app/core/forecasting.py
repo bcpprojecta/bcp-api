@@ -567,70 +567,20 @@ async def generate_forecast_for_user(
     print(f"  Built cash position forecast. Shape: {cash_position_df.shape}")
 
     # 5. Prepare the final DataFrame for 'full_forecast_output' table
-    # Expected columns: Date, Forecasted Amount, Forecasted Cash Balance, Actual Cash Balance
-    # cash_position_df should already contain: Date, Forecasted Amount, Forecasted Cash Balance, Actual Cash Balance
-    
     final_forecast_df = cash_position_df.copy()
-    
-    # Ensure all required columns are present and correctly named as per 'full_forecast_output'
-    # Rename columns if necessary, though build_cash_position_forecast should already align them.
-    # For example, if build_cash_position_forecast produced 'Forecasted_Cash_Balance', rename it here.
-    # Assuming build_cash_position_forecast output is already: 
-    # ['Date', 'Forecasted Amount', 'Forecasted Cash Balance', 'Actual Cash Balance']
 
-    # Add user_id (will be done in the router before insertion, but good to note)
-    # final_forecast_df['user_id'] = str(user_id) 
-        
-    # Convert Date to YYYY-MM-DD string if it's not already, for DB insertion consistency
-    # (though Supabase client might handle datetime objects correctly)
+    # Convert Date to YYYY-MM-DD string for DB insertion consistency
     if 'Date' in final_forecast_df.columns and pd.api.types.is_datetime64_any_dtype(final_forecast_df['Date']):
         final_forecast_df['Date'] = final_forecast_df['Date'].dt.strftime('%Y-%m-%d')
 
-    # Ensure numeric columns are rounded (e.g., to 2 decimal places)
+    # Round numeric columns to 2 decimal places
     numeric_cols = ['Forecasted Amount', 'Forecasted Cash Balance', 'Actual Cash Balance']
     for col in numeric_cols:
         if col in final_forecast_df.columns:
             final_forecast_df[col] = pd.to_numeric(final_forecast_df[col], errors='coerce').round(2)
-            # Handle potential NaNs introduced by to_numeric if needed (e.g., fill with None for DB)
-            # final_forecast_df[col] = final_forecast_df[col].astype(object).where(pd.notnull(final_forecast_df[col]), None)
 
-    # Select only the columns for the final table in the correct order if desired
+    # Select output columns in the expected order, keeping only those that exist
     output_columns = ['Date', 'Forecasted Amount', 'Forecasted Cash Balance', 'Actual Cash Balance']
-    # Filter out any columns that might not exist if some steps failed to produce them fully
-    existing_output_columns = [col for col in output_columns if col in final_forecast_df.columns]
-    final_forecast_df = final_forecast_df[existing_output_columns]
-
-    print(f"✅ Final forecast DataFrame for user {user_id}, currency {currency} generated. Shape: {final_forecast_df.shape}. Columns: {final_forecast_df.columns.tolist()}")
-    
-    # Add the currency column to the DataFrame
-    final_forecast_df['currency'] = currency.upper() # Or just currency if lowercase is preferred and consistent
-    print(f"  Added 'currency' column with value: {currency.upper()}. Shape after adding currency: {final_forecast_df.shape}")
-
-    # Ensure specific column names as expected by the database/Pydantic model
-    # Rename columns if necessary, though build_cash_position_forecast should already align them.
-    # For example, if build_cash_position_forecast produced 'Forecasted_Cash_Balance', rename it here.
-    # Assuming build_cash_position_forecast output is already: 
-    # ['Date', 'Forecasted Amount', 'Forecasted Cash Balance', 'Actual Cash Balance']
-
-    # Add user_id (will be done in the router before insertion, but good to note)
-    # final_forecast_df['user_id'] = str(user_id) 
-    
-    # Convert Date to YYYY-MM-DD string if it's not already, for DB insertion consistency
-    # (though Supabase client might handle datetime objects correctly)
-    if 'Date' in final_forecast_df.columns and pd.api.types.is_datetime64_any_dtype(final_forecast_df['Date']):
-        final_forecast_df['Date'] = final_forecast_df['Date'].dt.strftime('%Y-%m-%d')
-
-    # Ensure numeric columns are rounded (e.g., to 2 decimal places)
-    numeric_cols = ['Forecasted Amount', 'Forecasted Cash Balance', 'Actual Cash Balance']
-    for col in numeric_cols:
-        if col in final_forecast_df.columns:
-            final_forecast_df[col] = pd.to_numeric(final_forecast_df[col], errors='coerce').round(2)
-            # Handle potential NaNs introduced by to_numeric if needed (e.g., fill with None for DB)
-            # final_forecast_df[col] = final_forecast_df[col].astype(object).where(pd.notnull(final_forecast_df[col]), None)
-
-    # Select only the columns for the final table in the correct order if desired
-    output_columns = ['Date', 'Forecasted Amount', 'Forecasted Cash Balance', 'Actual Cash Balance']
-    # Filter out any columns that might not exist if some steps failed to produce them fully
     existing_output_columns = [col for col in output_columns if col in final_forecast_df.columns]
     final_forecast_df = final_forecast_df[existing_output_columns]
 
