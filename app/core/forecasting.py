@@ -139,13 +139,6 @@ def forecast_transaction_amounts(
         print(f"  Fetched {len(df_transactions)} transaction records from Supabase.")
         if not df_transactions.empty:
             df_transactions['Reporting Date'] = pd.to_datetime(df_transactions['Reporting Date'])
-            print(f"  DEBUG DF_TRANSACTIONS from Supabase: Min Reporting Date: {df_transactions['Reporting Date'].min().strftime('%Y-%m-%d') if not df_transactions.empty else 'N/A'}, Max Reporting Date: {df_transactions['Reporting Date'].max().strftime('%Y-%m-%d') if not df_transactions.empty else 'N/A'}")
-            print(f"  DEBUG DF_TRANSACTIONS from Supabase: Sample data (head 1):")
-            print(df_transactions.head(1).to_string())
-            print(f"  DEBUG DF_TRANSACTIONS from Supabase: Sample data (tail 1):")
-            print(df_transactions.tail(1).to_string())
-        else:
-            print(f"  DEBUG DF_TRANSACTIONS from Supabase: DataFrame is empty after fetching.")
 
 
         # MODIFICATION: Removed some less critical logs from here to reduce verbosity
@@ -170,20 +163,11 @@ def forecast_transaction_amounts(
         df_transactions = df_transactions.dropna(subset=['Reporting Date', 'Transaction Amount', 'Transaction Code'])
 
         # Filter out Treasury transactions BEFORE grouping
-        print(f"  DEBUG: Shape of df_transactions before Treasury filter: {df_transactions.shape}")
         df_transactions = df_transactions[df_transactions["transaction_category"] != "Treasury"].copy()
-        print(f"  DEBUG: Shape of df_transactions after Treasury filter: {df_transactions.shape}")
 
         if df_transactions.empty:
              print("⚠️ No non-Treasury transaction data found for forecasting.")
              return None
-
-        # DEBUG: Log stats after processing
-        if not df_transactions.empty:
-            print(f"  DEBUG: Transaction Amount stats AFTER processing (before daily_by_code): {df_transactions['Transaction Amount'].describe(percentiles=[.01, .05, .25, .5, .75, .95, .99])}")
-            print(f"  DEBUG: Sample Transaction Amounts AFTER processing: {df_transactions['Transaction Amount'].head().tolist()}")
-        else:
-            print("  DEBUG: df_transactions is EMPTY AFTER processing (before daily_by_code).")
 
         # 2. Aggregate daily amounts per transaction code
         daily_by_code = df_transactions.groupby(['Reporting Date', 'Transaction Code'])['Transaction Amount'].sum().unstack(fill_value=0)
@@ -192,10 +176,6 @@ def forecast_transaction_amounts(
         if daily_by_code.empty:
              print("⚠️ Aggregated daily data (daily_by_code) is empty.")
              return None
-        
-        print(f"  DEBUG: daily_by_code shape: {daily_by_code.shape}, Codes found: {daily_by_code.columns.tolist()}")
-        if not daily_by_code.empty:
-            print(f"  DEBUG: daily_by_code index range: {daily_by_code.index.min()} to {daily_by_code.index.max()}")
 
         # 3. Forecast per code
         print(f"  Forecasting for {len(daily_by_code.columns)} transaction codes...")
@@ -249,15 +229,6 @@ def forecast_transaction_amounts(
                 # Filter for training data: index >= cutoff and index < notebook_anchor_date
                 train = df_ml[(df_ml.index >= pd_train_cutoff_date) & (df_ml.index < pd_notebook_anchor_date)]
 
-                # Log training data details
-                if not train.empty:
-                    print(f"    DEBUG TRAIN_DF: Code {code}, shape after applying window: {train.shape}, index range: {train.index.min() if not train.empty else 'N/A'} to {train.index.max() if not train.empty else 'N/A'}")
-                    if not train['Amount'].empty:
-                        print(f"    DEBUG Y_TRAIN_STATS: Code {code}, y_train stats:\n{train['Amount'].describe(percentiles=[.01, .05, .25, .5, .75, .95, .99])}")
-                        print(f"    DEBUG Y_TRAIN_SAMPLE: Code {code}, y_train sample (5): {train['Amount'].head().tolist()}")
-                    else:
-                        print(f"    DEBUG TRAIN_DATA: Code {code}, y_train is EMPTY.")
-
                 model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
                 model.fit(train.drop(columns='Amount'), train['Amount'])
 
@@ -287,13 +258,10 @@ def forecast_transaction_amounts(
                     features_for_this_day_df = add_features(combined_for_single_pred_features.assign(Amount=combined_for_single_pred_features['Amount'].fillna(0))).loc[[current_pred_date]]
                     
                     if features_for_this_day_df.empty:
-                        print(f"    DEBUG: Code {code} - Skipping date {current_pred_date.strftime('%Y-%m-%d')} due to empty features after add_features.")
-                        # Decide how to handle this: predict 0, or skip and potentially break cumsum?
-                        # For now, let's predict 0 if features are missing, to maintain continuity for cumsum.
-                        y_pred_single = 0.0 
+                        # Predict 0 if features are missing, to maintain continuity for cumsum.
+                        y_pred_single = 0.0
                     else:
                         X_pred_single = features_for_this_day_df.drop(columns='Amount', errors='ignore')
-                        print(f"      DEBUG PREDICT: Code {code}, Date {current_pred_date.strftime('%Y-%m-%d')}, X_pred_single shape: {X_pred_single.shape}, Columns: {X_pred_single.columns.tolist()}")
                         if X_pred_single.empty and 'Amount' not in features_for_this_day_df.columns : # if only Amount column existed
                              y_pred_single = 0.0 # or handle as error
                         elif X_pred_single.empty and 'Amount' in features_for_this_day_df.columns and len(features_for_this_day_df.columns) ==1 :
@@ -405,7 +373,6 @@ def forecast_transaction_amounts(
                     
                     last_known_df = pd.concat([last_known_df, update_row])
                     last_known_df = last_known_df.sort_index() # Keep it sorted by date
-                    print(f"      DEBUG UPDATE_LAST_KNOWN: Code {code}, Date {current_pred_date.strftime('%Y-%m-%d')}, last_known_df updated. Shape: {last_known_df.shape}, Tail(1):\n{last_known_df.tail(1)}")
 
                 # This was the loop for a single code.
                 # `all_forecast_rows` collects predictions from all codes.
