@@ -258,7 +258,7 @@ def forecast_transaction_amounts(
                     else:
                         print(f"    DEBUG TRAIN_DATA: Code {code}, y_train is EMPTY.")
 
-                model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+                model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
                 model.fit(train.drop(columns='Amount'), train['Amount'])
 
                 # Forecast loop
