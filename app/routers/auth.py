@@ -80,6 +80,48 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+@router.post("/refresh", response_model=Token)
+async def refresh_access_token(
+    payload: dict = Body(...),
+    db: Client = Depends(get_supabase_anon_client)
+):
+    """Exchanges a refresh_token for a new access_token (+ rotated refresh_token).
+
+    Called by the frontend when an API request returns 401 because the
+    short-lived access token has expired. Lets the user stay logged in for as
+    long as the refresh token remains valid (Supabase default: 30 days).
+    """
+    refresh_token = payload.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="refresh_token is required.",
+        )
+
+    try:
+        response = db.auth.refresh_session(refresh_token)
+    except Exception as e:
+        print(f"Refresh failed: {type(e).__name__} - {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token is invalid or expired. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not response or not getattr(response, "session", None) or not response.session.access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh did not return a new session. Please log in again.",
+        )
+
+    return Token(
+        access_token=response.session.access_token,
+        token_type="bearer",
+        refresh_token=response.session.refresh_token or refresh_token,
+        expires_in=response.session.expires_in if response.session.expires_in is not None else 3600,
+    )
+
+
 @router.get("/users/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_active_user)):
     """
