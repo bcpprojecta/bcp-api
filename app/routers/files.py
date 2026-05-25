@@ -707,15 +707,8 @@ async def generate_user_forecast(
         df_to_insert = forecast_df.copy()
         df_to_insert['user_id'] = str(user_id) # Add user_id as string for Supabase
         
-        # Ensure the currency column from forecasting.py is present and correctly cased for the insert
-        # forecasting.py should add 'currency' (lowercase) with uppercase value (e.g. CAD)
-        if 'currency' not in df_to_insert.columns:
-            print(f"CRITICAL ⚠️: 'currency' column MISSING from forecast_df in router. Attempting to add.")
-            df_to_insert['currency'] = currency # currency is already request_data.currency.upper()
-        else:
-            print(f"✅ 'currency' column found in forecast_df from forecasting.py. Values: {df_to_insert['currency'].unique().tolist()[:5]}")
-            # Ensure it's uppercase as expected by the rest of the logic/DB query (if not already)
-            df_to_insert['currency'] = df_to_insert['currency'].str.upper()
+        # Router is the source of truth for currency on the insert
+        df_to_insert['currency'] = currency
 
         # Ensure Date is string and other numerics are float/None
         if 'Date' in df_to_insert.columns:
